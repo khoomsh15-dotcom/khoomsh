@@ -7,10 +7,10 @@ from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from playwright.async_api import async_playwright
 
-# --- KEEP ALIVE SERVER ---
+# --- 1. KEEP ALIVE SERVER ---
 app = Flask('')
 @app.route('/')
-def home(): return "WA Validator is Live & Error-Less"
+def home(): return "WA Validator Bot is Live & Stable"
 
 def run():
     port = int(os.environ.get("PORT", 10000))
@@ -19,7 +19,7 @@ def run():
 def keep_alive():
     Thread(target=run).start()
 
-# --- CONFIG ---
+# --- 2. CONFIGURATION ---
 API_ID = 31177437
 API_HASH = '2edea950fe232f2e0ba6febfcd036452'
 SESSION_STR = '1BVtsOMIBu29KyU3npaBUEiwW_M1Mem4iKHV6kCENAw5OepzMGecUxHo5RdGmA9e_Pr2pQPbKlL8_McBe0JAnN5Hts1pHKeGZmV40oBZ6MKu5g-7xuJx1epZZWqN--W-l35ujcq3tl9pb_vALtAotdtNhvgwdgIcty8plWZkTrvS_ru1CQ5MUf_eTP9brXJfwOyn1vC92WVZSGWwApnWtlKX4mmEBEN3GXHUuCyPjp07RdgwadimysqHw-GoIENCdUIoHUkDepofk374gwGGnS4-YYBW81lv53-Pn6wLdi4hE3gxBNOMz29fVjlVa2cDgAvQSnCYsxCD8QqdBkh_VIyIRpeRaOCw='
@@ -27,8 +27,9 @@ GROUP_ID = -1003211737650
 
 processed_numbers = set()
 
+# --- 3. VALIDATOR LOGIC ---
 async def validate_number(page, client, phone):
-    # India Format Fix
+    # India (+91) Format Fix
     if not phone.startswith('+91'):
         if len(phone) == 10: phone = '+91' + phone
         elif len(phone) == 12 and phone.startswith('91'): phone = '+' + phone
@@ -37,11 +38,11 @@ async def validate_number(page, client, phone):
     if phone in processed_numbers: return
     processed_numbers.add(phone)
     
-    await client.send_message('me', f"⏳ **CHECKING**: `{phone}`")
+    await client.send_message('me', f"⏳ **VALIDATING**: `{phone}`...")
     
     try:
-        # High Timeout for Render
-        await page.goto("https://web.whatsapp.com/", timeout=120000)
+        # High Timeout for Render's Network
+        await page.goto("https://web.whatsapp.com/", timeout=120000, wait_until="domcontentloaded")
         await asyncio.sleep(15) 
         
         link_selector = "text='Link with phone number'"
@@ -51,46 +52,58 @@ async def validate_number(page, client, phone):
         await asyncio.sleep(5)
         await page.fill('input[aria-label="Type your phone number."]', phone)
         await page.keyboard.press("Enter")
-        await asyncio.sleep(10)
+        await asyncio.sleep(12) # Result load hone ka wait
 
         content = (await page.content()).lower()
         
+        # Result Categories
         if "is too short" in content or "invalid" in content:
-            res = "❌ INVALID NUMBER"
+            status = "❌ INVALID (Number Galat Hai)"
         elif "try again in" in content or "too many times" in content:
-            res = "🚫 OTP LIMIT (Blocked for now)"
+            status = "🚫 LIMITED (OTP Limit Hit Hai)"
         elif "two-step verification" in content or "2-step" in content:
-            res = "🔒 2FA ENABLED"
+            status = "🔒 2FA LOCKED (Password Laga Hai)"
         elif "code" in content or "enter" in content:
-            res = "✅ AVAILABLE (OTP Sent)"
+            status = "✅ AVAILABLE (OTP Sent!)"
         else:
-            res = "❓ UNKNOWN (Page not loaded correctly)"
+            status = "❓ UNKNOWN (Page Loading Issue)"
 
-        await client.send_message('me', f"📊 **REPORT**: `{phone}`\nStatus: {res}")
+        await client.send_message('me', f"📊 **REPORT**: `{phone}`\nResult: {status}")
 
     except Exception as e:
-        await client.send_message('me', f"⚠️ **FAILED**: `{phone}`\nReason: Timeout or Browser Error")
+        error_msg = str(e)
+        reason = "Timeout/Slow Render Net" if "Timeout" in error_msg else "Browser Launch Issue"
+        await client.send_message('me', f"⚠️ **FAILED**: `{phone}`\nReason: {reason}")
 
 async def main():
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"])
-        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        # Docker Optimized Browser Launch
+        browser = await p.chromium.launch(
+            headless=True, 
+            args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
+        )
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
         page = await context.new_page()
         
         client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
         await client.start()
 
-        # History Scan: Last 10 unique India numbers
+        print("--- BOT STARTED: SCANNING LAST 10 ---")
+        
+        # History Scan (Last 10 Unique India Numbers)
         count = 0
-        async for msg in client.iter_messages(GROUP_ID, limit=500):
+        async for msg in client.iter_messages(GROUP_ID, limit=300):
             if count >= 10: break
             if msg.text:
                 match = re.search(r'\+?\d{10,15}', msg.text)
                 if match:
                     await validate_number(page, client, match.group())
                     count += 1
-                    await asyncio.sleep(20)
+                    await asyncio.sleep(20) # 20s gap between checks
 
+        # Live Monitoring
         @client.on(events.NewMessage(chats=GROUP_ID))
         async def handler(event):
             match = re.search(r'\+?\d{10,15}', event.raw_text)
