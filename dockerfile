@@ -1,8 +1,8 @@
-FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
+FROM mcr.microsoft.com/playwright/python:v1.49.0-noble
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-# Ye line executable download kar degi
-RUN playwright install chromium
+# Ye command browser ko force download karegi
+RUN playwright install --with-deps chromium
 CMD ["python", "main.py"]
