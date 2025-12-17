@@ -7,13 +7,17 @@ from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from playwright.async_api import async_playwright
 
+# --- KEEP ALIVE SERVER ---
 app = Flask('')
 @app.route('/')
-def home(): return "WA Validator is Live"
+def home(): return "WA Validator is Live & Error-Less"
+
+def run():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
-    port = int(os.environ.get("PORT", 10000))
-    Thread(target=lambda: app.run(host='0.0.0.0', port=port)).start()
+    Thread(target=run).start()
 
 # --- CONFIG ---
 API_ID = 31177437
@@ -24,7 +28,7 @@ GROUP_ID = -1003211737650
 processed_numbers = set()
 
 async def validate_number(page, client, phone):
-    # India Format (+91)
+    # India Format Fix
     if not phone.startswith('+91'):
         if len(phone) == 10: phone = '+91' + phone
         elif len(phone) == 12 and phone.startswith('91'): phone = '+' + phone
@@ -33,15 +37,14 @@ async def validate_number(page, client, phone):
     if phone in processed_numbers: return
     processed_numbers.add(phone)
     
-    await client.send_message('me', f"⏳ **VALIDATING**: `{phone}`...")
+    await client.send_message('me', f"⏳ **CHECKING**: `{phone}`")
     
     try:
-        # Page load timeout badha kar 120s kiya
-        await page.goto("https://web.whatsapp.com/", timeout=120000, wait_until="networkidle")
+        # High Timeout for Render
+        await page.goto("https://web.whatsapp.com/", timeout=120000)
         await asyncio.sleep(15) 
         
         link_selector = "text='Link with phone number'"
-        # Button dhoondhne ka time badhaya
         await page.wait_for_selector(link_selector, timeout=60000)
         await page.click(link_selector)
         
@@ -53,51 +56,40 @@ async def validate_number(page, client, phone):
         content = (await page.content()).lower()
         
         if "is too short" in content or "invalid" in content:
-            status = "❌ INVALID"
+            res = "❌ INVALID NUMBER"
         elif "try again in" in content or "too many times" in content:
-            status = "🚫 LIMITED"
+            res = "🚫 OTP LIMIT (Blocked for now)"
         elif "two-step verification" in content or "2-step" in content:
-            status = "🔒 2FA LOCKED"
+            res = "🔒 2FA ENABLED"
         elif "code" in content or "enter" in content:
-            status = "✅ OTP SENT (AVAILABLE)"
+            res = "✅ AVAILABLE (OTP Sent)"
         else:
-            status = "❓ UNKNOWN (Check Logs)"
+            res = "❓ UNKNOWN (Page not loaded correctly)"
 
-        await client.send_message('me', f"📊 **RESULT**: `{phone}`\nStatus: {status}")
+        await client.send_message('me', f"📊 **REPORT**: `{phone}`\nStatus: {res}")
 
     except Exception as e:
-        error_msg = str(e)
-        short_error = "Timeout/Slow Internet" if "Timeout" in error_msg else error_msg[:50]
-        await client.send_message('me', f"⚠️ **FAILED**: `{phone}`\nReason: {short_error}")
+        await client.send_message('me', f"⚠️ **FAILED**: `{phone}`\nReason: Timeout or Browser Error")
 
 async def main():
     async with async_playwright() as p:
-        # Browser settings ko aur light banaya
-        browser = await p.chromium.launch(
-            headless=True, 
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
-        )
-        # Real browser jaisa User-Agent
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
+        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"])
+        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         page = await context.new_page()
         
         client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
         await client.start()
 
-        print("--- BOT IS READY ---")
-        
-        # History Scan (Last 10 unique numbers)
+        # History Scan: Last 10 unique India numbers
         count = 0
-        async for msg in client.iter_messages(GROUP_ID, limit=200):
+        async for msg in client.iter_messages(GROUP_ID, limit=500):
             if count >= 10: break
             if msg.text:
                 match = re.search(r'\+?\d{10,15}', msg.text)
                 if match:
                     await validate_number(page, client, match.group())
                     count += 1
-                    await asyncio.sleep(20) # Thoda zyada gap safety ke liye
+                    await asyncio.sleep(20)
 
         @client.on(events.NewMessage(chats=GROUP_ID))
         async def handler(event):
