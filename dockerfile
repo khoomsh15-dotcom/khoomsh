@@ -3,6 +3,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-# Ye command browser ko force download karegi
+# Ye line browser aur uski saari dependencies install karegi
 RUN playwright install --with-deps chromium
 CMD ["python", "main.py"]
